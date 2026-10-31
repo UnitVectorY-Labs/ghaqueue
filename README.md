@@ -3,5 +3,12 @@
 # ghaqueue
 
 Command-line observability for GitHub Actions queues across repositories, workflows, and runners.
-# ghaqueue
-Command-line observability for GitHub Actions queues across an organization, repositories, workflows, and runners.
+
+See the [documentation](https://ghaqueue.unitvectorylabs.com) for installation, configuration, examples, and API limitations.
+
+```bash
+go install github.com/UnitVectorY-Labs/ghaqueue@latest
+ghaqueue --org UnitVectorY-Labs
+ghaqueue pools --org UnitVectorY-Labs
+ghaqueue failures --org UnitVectorY-Labs --since 24h
+```

@@ -1,7 +1,10 @@
 package main
 
-import "github.com/UnitVectorY-Labs/ghaqueue/internal/app"
+import (
+	"github.com/UnitVectorY-Labs/ghaqueue/internal/app"
+	"os"
+)
 
 var Version = "dev"
 
-func main() { app.Hello() }
+func main() { os.Exit(app.Run(os.Args[1:], Version, os.Stdout, os.Stderr)) }

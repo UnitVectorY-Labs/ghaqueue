@@ -45,6 +45,7 @@ type Runner struct {
 	Scope string `json:"scope"`
 }
 type Snapshot struct {
+	APIRequests  int64     `json:"api_requests"`
 	StartedAt    time.Time `json:"started_at"`
 	FinishedAt   time.Time `json:"finished_at"`
 	Repositories int       `json:"repositories"`

@@ -13,13 +13,15 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 type client struct {
-	http  *http.Client
-	token string
-	base  string
+	http     *http.Client
+	token    string
+	base     string
+	requests atomic.Int64
 }
 
 func newClient(ctx context.Context) *client {
@@ -49,6 +51,7 @@ func (c *client) get(ctx context.Context, path string, v any) error {
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
+	c.requests.Add(1)
 	res, e := c.http.Do(req)
 	if e != nil {
 		return e
@@ -85,26 +88,89 @@ func (c *client) repos(ctx context.Context, cfg Config) ([]string, error) {
 	sort.Strings(repos)
 	return repos, nil
 }
+
+// Small histories cost at most five reads; large histories use the complete
+// active-status queries rather than assuming recent runs contain all queued work.
+const fullHistoryLimit = 500
+
+var liveStatuses = []string{"queued", "in_progress", "waiting", "pending", "requested"}
+
+func (c *client) runPage(ctx context.Context, repo, status string, page int) ([]RunInfo, int, error) {
+	var data struct {
+		Total int       `json:"total_count"`
+		Runs  []RunInfo `json:"workflow_runs"`
+	}
+	q := url.Values{"per_page": {"100"}, "page": {strconv.Itoa(page)}, "exclude_pull_requests": {"true"}}
+	if status != "" {
+		q.Set("status", status)
+	}
+	if err := c.get(ctx, "/repos/"+repo+"/actions/runs?"+q.Encode(), &data); err != nil {
+		return nil, 0, err
+	}
+	for i := range data.Runs {
+		data.Runs[i].Repository = repo
+	}
+	return data.Runs, data.Total, nil
+}
 func (c *client) runs(ctx context.Context, repo, status string) ([]RunInfo, error) {
 	runs := []RunInfo{}
 	for page := 1; page <= 10; page++ {
-		var data struct {
-			Total int       `json:"total_count"`
-			Runs  []RunInfo `json:"workflow_runs"`
+		batch, total, err := c.runPage(ctx, repo, status, page)
+		if err != nil {
+			return runs, err
 		}
-		q := url.Values{"status": {status}, "per_page": {"100"}, "page": {strconv.Itoa(page)}}
-		if e := c.get(ctx, "/repos/"+repo+"/actions/runs?"+q.Encode(), &data); e != nil {
-			return runs, e
-		}
-		for _, r := range data.Runs {
-			r.Repository = repo
-			runs = append(runs, r)
-		}
-		if len(data.Runs) < 100 || len(runs) >= data.Total {
+		runs = append(runs, batch...)
+		if len(batch) < 100 || len(runs) >= total {
 			return runs, nil
 		}
 	}
 	return runs, fmt.Errorf("%s status=%s: reached GitHub's 1,000 filtered-run limit; results may be incomplete", repo, status)
+}
+func (c *client) liveRuns(ctx context.Context, repo string) ([]RunInfo, []string) {
+	first, total, err := c.runPage(ctx, repo, "", 1)
+	if err != nil {
+		return nil, []string{err.Error()}
+	}
+	result := []RunInfo{}
+	warnings := []string{}
+	if total <= fullHistoryLimit {
+		all := append([]RunInfo(nil), first...)
+		for page := 2; len(all) < total && len(first) == 100; page++ {
+			var batch []RunInfo
+			batch, total, err = c.runPage(ctx, repo, "", page)
+			if err != nil {
+				warnings = append(warnings, err.Error())
+				break
+			}
+			all = append(all, batch...)
+			if len(batch) < 100 {
+				break
+			}
+			// If the history grew during collection, avoid an unbounded history scan.
+			if total > fullHistoryLimit {
+				return c.liveStatusRuns(ctx, repo)
+			}
+		}
+		for _, r := range all {
+			if active(r.Status) {
+				result = append(result, r)
+			}
+		}
+		return result, warnings
+	}
+	return c.liveStatusRuns(ctx, repo)
+}
+func (c *client) liveStatusRuns(ctx context.Context, repo string) ([]RunInfo, []string) {
+	result := []RunInfo{}
+	warnings := []string{}
+	for _, status := range liveStatuses {
+		runs, err := c.runs(ctx, repo, status)
+		result = append(result, runs...)
+		if err != nil {
+			warnings = append(warnings, err.Error())
+		}
+	}
+	return result, warnings
 }
 func (c *client) jobs(ctx context.Context, repo string, r RunInfo) ([]Job, error) {
 	jobs := []Job{}
@@ -141,82 +207,120 @@ func (c *client) runners(ctx context.Context, scope string) ([]Runner, error) {
 		}
 	}
 }
-func collect(ctx context.Context, c *client, cfg Config, command string) (Snapshot, error) {
+
+type scanEvent struct {
+	Phase                       string
+	Done, Total, Runs, Warnings int
+}
+
+func collect(ctx context.Context, c *client, cfg Config, command string, observers ...func(scanEvent)) (Snapshot, error) {
+	notify := func(e scanEvent) {
+		for _, observe := range observers {
+			observe(e)
+		}
+	}
+	notify(scanEvent{Phase: "Discovering repositories"})
 	s := Snapshot{StartedAt: time.Now().UTC(), Runs: []RunInfo{}, Warnings: []string{}}
 	repos, e := c.repos(ctx, cfg)
 	if e != nil {
+		s.APIRequests = c.requests.Load()
 		return s, e
 	}
 	s.Repositories = len(repos)
-	var mu sync.Mutex
+	type result struct {
+		runs     []RunInfo
+		runners  []Runner
+		warnings []string
+	}
+	results := make(chan result)
 	tasks := make(chan string)
 	var wg sync.WaitGroup
 	since, _ := time.ParseDuration(cfg.Since)
 	cutoff := s.StartedAt.Add(-since)
+	notify(scanEvent{Phase: "Scanning", Total: len(repos)})
 	for i := 0; i < cfg.Workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for repo := range tasks {
 				local := []RunInfo{}
+				inventory := []Runner{}
 				warnings := []string{}
-				statuses := []string{"queued", "in_progress", "waiting", "pending", "requested"}
+				runs := []RunInfo{}
 				if command == "failures" {
-					statuses = []string{"failure", "timed_out", "action_required"}
+					for _, status := range []string{"failure", "timed_out", "action_required"} {
+						batch, err := c.runs(ctx, repo, status)
+						runs = append(runs, batch...)
+						if err != nil {
+							warnings = append(warnings, err.Error())
+						}
+					}
+				} else if command == "runs" && cfg.Status != "" {
+					if cfg.Status != "completed" {
+						batch, err := c.runs(ctx, repo, cfg.Status)
+						runs = append(runs, batch...)
+						if err != nil {
+							warnings = append(warnings, err.Error())
+						}
+					}
+				} else {
+					batch, issues := c.liveRuns(ctx, repo)
+					runs = batch
+					warnings = append(warnings, issues...)
 				}
 				seen := map[int64]bool{}
-				for _, status := range statuses {
-					runs, err := c.runs(ctx, repo, status)
-					if err != nil {
-						warnings = append(warnings, err.Error())
+				for _, r := range runs {
+					if seen[r.ID] || !matchesWorkflow(r, cfg.Workflow) {
+						continue
 					}
-					for _, r := range runs {
-						if seen[r.ID] || !matchesWorkflow(r, cfg.Workflow) {
+					seen[r.ID] = true
+					if command == "failures" {
+						if r.UpdatedAt.Before(cutoff) || (cfg.Status != "" && r.Status != cfg.Status) {
 							continue
 						}
-						seen[r.ID] = true
-						if command == "failures" {
-							if r.UpdatedAt.Before(cutoff) {
-								continue
-							}
-							if cfg.Status != "" && r.Status != cfg.Status {
-								continue
-							}
-						} else if !active(r.Status) {
-							continue
-						}
-						if command != "failures" || cfg.Label != "" || cfg.RunnerType != "" {
-							jobs, err := c.jobs(ctx, repo, r)
-							if err != nil {
-								warnings = append(warnings, err.Error())
-							}
-							r.Jobs = jobs
-						}
-						local = append(local, r)
+					} else if !active(r.Status) {
+						continue
 					}
+					needJobs := command != "runs" && command != "failures" || cfg.Label != "" || cfg.RunnerType != ""
+					if needJobs {
+						jobs, err := c.jobs(ctx, repo, r)
+						if err != nil {
+							warnings = append(warnings, err.Error())
+						}
+						r.Jobs = jobs
+					}
+					local = append(local, r)
 				}
+
 				if command == "runners" {
 					rs, err := c.runners(ctx, "repos/"+repo)
-					mu.Lock()
-					s.Runners = append(s.Runners, rs...)
-					mu.Unlock()
+					inventory = append(inventory, rs...)
 					if err != nil {
 						warnings = append(warnings, err.Error())
 					}
 				}
-				mu.Lock()
-				s.Runs = append(s.Runs, local...)
-				s.Warnings = append(s.Warnings, warnings...)
-				mu.Unlock()
+				results <- result{local, inventory, warnings}
 			}
 		}()
 	}
-	for _, repo := range repos {
-		tasks <- repo
+	go func() {
+		for _, repo := range repos {
+			tasks <- repo
+		}
+		close(tasks)
+		wg.Wait()
+		close(results)
+	}()
+	done := 0
+	for result := range results {
+		s.Runs = append(s.Runs, result.runs...)
+		s.Runners = append(s.Runners, result.runners...)
+		s.Warnings = append(s.Warnings, result.warnings...)
+		done++
+		notify(scanEvent{Phase: "Scanning", Done: done, Total: len(repos), Runs: len(s.Runs), Warnings: len(s.Warnings)})
 	}
-	close(tasks)
-	wg.Wait()
 	if command == "runners" {
+		notify(scanEvent{Phase: "Reading organization runners", Done: len(repos), Total: len(repos), Runs: len(s.Runs), Warnings: len(s.Warnings)})
 		org := cfg.Organization
 		if org == "" && cfg.Repo != "" {
 			org = strings.Split(cfg.Repo, "/")[0]
@@ -244,6 +348,7 @@ func collect(ctx context.Context, c *client, cfg Config, command string) (Snapsh
 		return s.Runners[i].Scope < s.Runners[j].Scope
 	})
 	sort.Strings(s.Warnings)
+	s.APIRequests = c.requests.Load()
 	s.FinishedAt = time.Now().UTC()
 	return s, nil
 }

@@ -19,6 +19,7 @@ Command-line observability for GitHub Actions queues across repositories, workfl
 - **Runner inventory** — self-hosted runner status, occupancy, and observed assignments
 - **Recent failures** — find failed, timed out, and action-required runs for investigation
 - **Stateless and read-only** — every invocation reads GitHub; no database, background process, or workflow mutations
+- **Readable terminal output** — colored summaries, scan progress, and compact demand views; honors `NO_COLOR`
 - **Scriptable output** — JSON snapshots and explicit exit codes for incomplete results
 
 ## Quick Start

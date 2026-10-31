@@ -37,8 +37,8 @@ Compare exact label sets and runner assignments. A runner must satisfy all reque
 ## Investigate One Workflow
 
 ```bash
-ghaqueue runs --repo UnitVectorY-Labs/ghorgsync --workflow build
-ghaqueue jobs --repo UnitVectorY-Labs/ghorgsync --workflow build
+ghaqueue runs --repo UnitVectorY-Labs/ghorgsync --workflow build --details
+ghaqueue jobs --repo UnitVectorY-Labs/ghorgsync --workflow build --details
 ```
 
 Use the run view to see workflows that have not materialized jobs yet. Open the emitted GitHub URL to inspect concurrency or approval conditions.
@@ -75,3 +75,49 @@ GHAQUEUE_ORG=UnitVectorY-Labs GHAQUEUE_JSON=true ghaqueue jobs > snapshot.json
 ```
 
 Check the command's exit code before consuming the file. Code `2` means that a usable but incomplete snapshot was written; inspect its `warnings`. The file is an explicit export, not state maintained by the application.
+
+## Terminal Preferences
+
+```bash
+# Keep progress, remove color
+NO_COLOR=1 ghaqueue --org UnitVectorY-Labs
+
+# Suppress progress, keep terminal colors
+ghaqueue --org UnitVectorY-Labs --no-progress
+
+# Include GitHub links for investigation
+ghaqueue jobs --org UnitVectorY-Labs --details
+```
+
+Piping or redirecting either stream disables progress automatically. Redirected report output contains no color codes. For CI, `--json` also suppresses progress.
+
+## Example Overview
+
+This illustrative snapshot scanned 100 repositories, found active jobs in two, and found one waiting workflow with no jobs visible:
+
+```text
+ghaqueue ─ acme
+100 repositories scanned · overview
+
+  2 pending  ·  1 running
+  Active jobs across 2 repositories
+  Oldest pending: 23m
+  1 active workflow run has no jobs visible yet
+  1 workflow run is waiting; check GitHub for approval or other gates
+
+Runner demand
+Runner labels            Pending  Running  Oldest pending  Repos
+build,linux,self-hosted  2        0        23m             2
+ubuntu-latest            0        1        —               1
+
+Repositories
+Repository  Pending  Running  Oldest pending
+acme/api    1        1        23m
+acme/web    1        0        18m
+
+Pending age includes dependency and approval waits.
+
+Inspect: jobs · runs · workflows · pools · runners
+```
+
+The label view highlights pending self-hosted demand separately from running work on `ubuntu-latest`. Zero running jobs for a label set does not establish a stall. Use `jobs --label self-hosted` and `runners` to investigate.

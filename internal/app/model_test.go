@@ -36,7 +36,7 @@ func TestAggregationAndFilters(t *testing.T) {
 func TestUnmaterializedRunAndTerminalSafety(t *testing.T) {
 	var b bytes.Buffer
 	render(&b, Snapshot{Runs: []RunInfo{{Name: "no jobs yet", Status: "queued"}}}, Config{}, "overview")
-	if !strings.Contains(b.String(), "queued=1") || !strings.Contains(b.String(), "0 pending") {
+	if !strings.Contains(b.String(), "1 active workflow run has no jobs visible yet") || !strings.Contains(b.String(), "0 pending") {
 		t.Fatal(b.String())
 	}
 	if clean("job\x1b[31m\nnext\tcell") != "job [31m next cell" {

@@ -1,0 +1,16 @@
+name: ghaqueue
+default_branch: main
+config:
+  description: "Command-line observability for GitHub Actions queues across repositories, workflows, and runners."
+  license: MIT
+  language: go
+  release: release-go
+  justfile: true
+  status: active
+  release_github: true
+  codecov:
+    enabled: false
+  docs:
+    enabled: true
+    domain: ghaqueue.unitvectorylabs.com
+  osv: sarif

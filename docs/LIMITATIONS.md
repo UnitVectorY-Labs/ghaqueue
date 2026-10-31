@@ -18,7 +18,7 @@ permalink: /limitations
 
 A snapshot establishes which work GitHub returned during the collection interval, its reported status, requested labels, timestamps, and assigned runners. It can reveal a large backlog, old pending jobs, offline runners, busy runners, and running jobs competing for the same labels.
 
-It cannot establish drain rate, a trend, an estimated completion time, or a definitive stall without observations over time. A pool with no running jobs and old pending work deserves investigation; that combination alone does not prove that capacity is unavailable. Latest start/finish timestamps are activity clues within the active runs scanned, not evidence that the entire queue is advancing. No historical state is stored.
+It cannot establish drain rate, a trend, an estimated completion time, or a definitive stall without observations over time. A pool with no running jobs and old pending work deserves investigation; that combination alone does not prove that capacity is unavailable. Job start/finish timestamps in JSON are activity clues within the active runs scanned, not evidence that the entire queue is advancing. No historical state is stored.
 
 ## Runs and Jobs Are Different
 
@@ -50,9 +50,15 @@ See [self-hosted runner API access requirements](https://docs.github.com/en/rest
 
 Only repositories visible to the authenticated caller can be scanned. A successful organization listing does not prove the token can see every private repository. Archived and disabled repositories are excluded from organization discovery. Restricted inventory access yields warnings, not invented zero capacity.
 
-GitHub limits filtered workflow run queries to 1,000 results per repository/query. ghaqueue reads up to that limit for each active status or failure conclusion, emits a warning when more results may exist, and returns exit code `2`. Repository, job, and runner listings otherwise continue through their pages. Narrowing the repository scope can reduce cost; workflow and label filters are applied locally and do not bypass a per-repository run-query limit.
+GitHub limits filtered workflow run queries to 1,000 results per repository/query. When using status-specific queries, ghaqueue reads up to that limit for each active status or failure conclusion, emits a warning when more results may exist, and returns exit code `2`. Repository, job, and runner listings otherwise continue through their pages. Narrowing the repository scope can reduce cost; workflow and label filters are applied locally and do not bypass a per-repository run-query limit.
 
-A live scan makes five status queries per repository before pagination and job reads. Large organizations can require hundreds or thousands of requests. Repository concurrency defaults to eight; tune `--workers` and `--timeout` to fit the organization and token limits. Failed requests are not retried. Warnings identify affected reads and include rate-limit headers where present. Never treat a partial snapshot as a complete count.
+Live scans first fetch one unfiltered page of up to 100 runs per repository. If GitHub reports at most 500 stored runs, ghaqueue reads the complete history in one to five requests and selects active runs locally. If more than 500 runs exist, it switches to the five active-status queries rather than assuming that the latest page contains all pending work. A history that grows past the threshold during pagination also falls back to status queries. This remains stateless and imposes no age cutoff on queued work.
+
+For histories of up to 100 runs, that reduces run-discovery calls from five to one. For histories over 500, the probe adds one call: six before pagination and job reads. The optimization saves requests in organizations with many small histories; it does not promise a reduction for every organization. GitHub's run-list API documents one status filter at a time, without an all-active or exclude-completed filter.
+
+The `runs` view skips job reads unless label/type filtering requires them. An explicit `runs --status` selects that status at the API rather than scanning all five. Job-based views still fetch jobs for all observed active runs, including in-progress runs that can contain queued jobs. Unused pull-request details are excluded from run responses to reduce payload size. `--details` and JSON report the number of API requests attempted by the scan.
+
+Large organizations can still require hundreds or thousands of requests. Repository concurrency defaults to eight; tune `--workers` and `--timeout` to fit the organization and token limits. Failed requests are not retried. Warnings identify affected reads and include rate-limit headers where present. Never treat a partial snapshot as a complete count.
 
 ## Recent Failures
 

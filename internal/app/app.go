@@ -41,7 +41,10 @@ func Run(args []string, version string, out, errOut io.Writer) int {
 	defer stop()
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	s, err := collect(ctx, newClient(ctx), c, command)
+	scan := startProgress(out, errOut, c)
+	defer scan.finish()
+	s, err := collect(ctx, newClient(ctx), c, command, scan.update)
+	scan.finish()
 	if err != nil {
 		fmt.Fprintln(errOut, "error:", err)
 		return 1
@@ -94,11 +97,12 @@ func Run(args []string, version string, out, errOut io.Writer) int {
 		fmt.Fprintln(errOut, "error:", err)
 		return 1
 	}
+	diagnostics := newTerminal(errOut, c)
 	for _, w := range s.Warnings {
-		fmt.Fprintln(errOut, "warning:", clean(w))
+		diagnostics.line(diagnostics.bad.Render("warning: ") + clean(w))
 	}
 	if len(s.Warnings) > 0 {
-		fmt.Fprintln(errOut, "Partial snapshot; totals may be incomplete.")
+		diagnostics.line(diagnostics.bad.Render("Partial snapshot; totals may be incomplete."))
 		return 2
 	}
 	return 0

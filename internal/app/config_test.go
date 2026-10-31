@@ -46,3 +46,19 @@ func TestInvalidConfigAndArguments(t *testing.T) {
 		t.Fatal("accepted unknown YAML key")
 	}
 }
+
+func TestPresentationFlagPrecedence(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("GHAQUEUE_ORG", "acme")
+	t.Setenv("GHAQUEUE_NO_COLOR", "true")
+	t.Setenv("GHAQUEUE_NO_PROGRESS", "true")
+	t.Setenv("GHAQUEUE_DETAILS", "false")
+	c, command, _, err := parse([]string{"--no-color=false", "--details", "jobs", "--no-progress=false"}, io.Discard)
+	if err != nil || command != "jobs" || c.NoColor || c.NoProgress || !c.Details {
+		t.Fatalf("presentation flags: %+v %s %v", c, command, err)
+	}
+	t.Setenv("GHAQUEUE_NO_PROGRESS", "invalid")
+	if _, _, _, err := parse(nil, io.Discard); err == nil {
+		t.Fatal("invalid boolean environment value accepted")
+	}
+}

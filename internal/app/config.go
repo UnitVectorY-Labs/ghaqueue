@@ -27,6 +27,9 @@ type Config struct {
 	Workers      int    `yaml:"workers"`
 	Timeout      string `yaml:"timeout"`
 	JSON         bool   `yaml:"json"`
+	NoColor      bool   `yaml:"no_color"`
+	NoProgress   bool   `yaml:"no_progress"`
+	Details      bool   `yaml:"details"`
 }
 
 func discoverConfig() (string, error) {
@@ -91,6 +94,23 @@ func parse(args []string, out io.Writer) (Config, string, bool, error) {
 			return c, "", false, errors.New("GHAQUEUE_JSON must be a boolean")
 		}
 	}
+	for _, setting := range []struct {
+		name, env, help string
+		value           *bool
+	}{
+		{"no-color", "GHAQUEUE_NO_COLOR", "Disable color", &c.NoColor},
+		{"no-progress", "GHAQUEUE_NO_PROGRESS", "Disable scan progress", &c.NoProgress},
+		{"details", "GHAQUEUE_DETAILS", "Show URLs and additional context", &c.Details},
+	} {
+		if v, ok := os.LookupEnv(setting.env); ok {
+			parsed, e := strconv.ParseBool(v)
+			if e != nil {
+				return c, "", false, fmt.Errorf("%s must be a boolean", setting.env)
+			}
+			*setting.value = parsed
+		}
+		f.BoolVar(setting.value, setting.name, *setting.value, setting.help+" ("+setting.env+")")
+	}
 	f.IntVar(&c.Workers, "workers", c.Workers, "Concurrent repositories (GHAQUEUE_WORKERS)")
 	f.BoolVar(&c.JSON, "json", c.JSON, "JSON output (GHAQUEUE_JSON)")
 	version := false
@@ -117,7 +137,7 @@ func parse(args []string, out io.Writer) (Config, string, bool, error) {
 		}
 		rest = append(rest, a)
 		name := strings.TrimLeft(strings.SplitN(a, "=", 2)[0], "-")
-		if !strings.Contains(a, "=") && name != "json" && name != "version" && name != "help" && name != "h" {
+		if !strings.Contains(a, "=") && name != "json" && name != "version" && name != "help" && name != "h" && name != "no-color" && name != "no-progress" && name != "details" {
 			if i+1 < len(args) {
 				i++
 				rest = append(rest, args[i])

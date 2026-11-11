@@ -2,7 +2,7 @@ package app
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +10,33 @@ import (
 	"testing"
 	"time"
 )
+
+func TestGetStrictJSON(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		wantErr    bool
+		wantID     int64
+	}{
+		{"valid", `{"id":42}`, false, 42},
+		{"duplicate name", `{"id":1,"id":2}`, true, 0},
+		{"invalid UTF-8", "{\"name\":\"\xff\"}", true, 0},
+		{"trailing value", `{"id":1} {"id":2}`, true, 0},
+		{"case sensitive", `{"ID":42}`, false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				fmt.Fprint(w, tc.body)
+			}))
+			defer srv.Close()
+			c := client{http: srv.Client(), base: srv.URL}
+			var run RunInfo
+			err := c.get(context.Background(), "/", &run)
+			if (err != nil) != tc.wantErr || (!tc.wantErr && run.ID != tc.wantID) {
+				t.Fatalf("get: ID=%d, error=%v", run.ID, err)
+			}
+		})
+	}
+}
 
 func TestRunsPaginationAndLimit(t *testing.T) {
 	for _, total := range []int{101, 1001} {
@@ -28,7 +55,7 @@ func TestRunsPaginationAndLimit(t *testing.T) {
 				for i := range a {
 					a[i].ID = int64((pages-1)*100 + i)
 				}
-				json.NewEncoder(w).Encode(map[string]any{"total_count": total, "workflow_runs": a})
+				json.MarshalWrite(w, map[string]any{"total_count": total, "workflow_runs": a})
 			}))
 			defer srv.Close()
 			c := client{http: srv.Client(), base: srv.URL, token: "example"}
@@ -99,7 +126,7 @@ func TestAdaptiveLiveRunRequests(t *testing.T) {
 					if status == "queued" {
 						runs = append(runs, RunInfo{ID: 999, Status: "queued", CreatedAt: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)})
 					}
-					json.NewEncoder(w).Encode(map[string]any{"total_count": len(runs), "workflow_runs": runs})
+					json.MarshalWrite(w, map[string]any{"total_count": len(runs), "workflow_runs": runs})
 					return
 				}
 				var page int
@@ -112,7 +139,7 @@ func TestAdaptiveLiveRunRequests(t *testing.T) {
 						runs[i].Status = "waiting"
 					}
 				}
-				json.NewEncoder(w).Encode(map[string]any{"total_count": total, "workflow_runs": runs})
+				json.MarshalWrite(w, map[string]any{"total_count": total, "workflow_runs": runs})
 			}))
 			defer srv.Close()
 			c := client{http: srv.Client(), base: srv.URL}

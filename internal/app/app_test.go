@@ -3,8 +3,23 @@ package app
 import (
 	"bytes"
 	"io"
+	"strings"
 	"testing"
 )
+
+func TestJSONOutput(t *testing.T) {
+	var out bytes.Buffer
+	if err := writeJSON(&out, Snapshot{Runs: []RunInfo{{}}, Warnings: nil}); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.HasSuffix(got, "\n") || !strings.Contains(got, "\n  \"runs\": [") || !strings.Contains(got, `"warnings": []`) || strings.Contains(got, `"jobs"`) || strings.Contains(got, `"runners"`) {
+		t.Fatalf("unexpected JSON output: %s", got)
+	}
+	if err := writeJSON(shortWriter{}, Snapshot{}); err == nil {
+		t.Fatal("lost JSON output failure")
+	}
+}
 
 type shortWriter struct{}
 

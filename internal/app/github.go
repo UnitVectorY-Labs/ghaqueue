@@ -2,7 +2,7 @@ package app
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"net/http"
@@ -60,7 +60,7 @@ func (c *client) get(ctx context.Context, path string, v any) error {
 	if res.StatusCode != 200 {
 		return fmt.Errorf("GitHub %s: HTTP %d (remaining=%s, reset=%s, retry-after=%s)", strings.Split(path, "?")[0], res.StatusCode, res.Header.Get("X-RateLimit-Remaining"), res.Header.Get("X-RateLimit-Reset"), res.Header.Get("Retry-After"))
 	}
-	return json.NewDecoder(io.LimitReader(res.Body, 32<<20)).Decode(v)
+	return json.UnmarshalRead(io.LimitReader(res.Body, 32<<20), v)
 }
 func (c *client) repos(ctx context.Context, cfg Config) ([]string, error) {
 	if cfg.Repo != "" {

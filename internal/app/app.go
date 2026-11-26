@@ -2,7 +2,8 @@ package app
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"flag"
 	"fmt"
@@ -85,9 +86,7 @@ func Run(args []string, version string, out, errOut io.Writer) int {
 			}
 		}
 		s.Runners = runners
-		enc := json.NewEncoder(out)
-		enc.SetIndent("", "  ")
-		err = enc.Encode(s)
+		err = writeJSON(out, s)
 	} else {
 		checked := &checkedWriter{w: out}
 		render(checked, s, c, command)
@@ -106,6 +105,15 @@ func Run(args []string, version string, out, errOut io.Writer) int {
 		return 2
 	}
 	return 0
+}
+
+func writeJSON(out io.Writer, s Snapshot) error {
+	checked := &checkedWriter{w: out}
+	if err := json.MarshalWrite(checked, s, jsontext.WithIndent("  ")); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintln(checked)
+	return err
 }
 
 type checkedWriter struct {

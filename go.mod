@@ -5,7 +5,7 @@ go 1.27.0 // GOVERSION
 require (
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/lipgloss v1.1.0
-	github.com/charmbracelet/x/ansi v0.11.9
+	github.com/charmbracelet/x/ansi v0.11.10
 	github.com/muesli/termenv v0.16.0
 	golang.org/x/term v0.48.0
 	gopkg.in/yaml.v3 v3.0.1
